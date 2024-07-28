@@ -33,25 +33,48 @@ class UserVisitController extends Controller
      */
     public function getUniqueVisitsByHour(Request $request)
     {
-        $selectedDate = $request->input('selectedDate');
+        try {
+            $selectedDate = $request->input('selectedDate');
 
-        $startDateTime = Carbon::parse("{$selectedDate} 00:00:00", 'Asia/Bangkok')->setTimezone('UTC');
-        $endDateTime = Carbon::parse("{$selectedDate} 23:59:59", 'Asia/Bangkok')->setTimezone('UTC');
-
-        $uniqueVisitsByHour = DB::table('user_visits')
-            ->select(
-                DB::raw('DATE_FORMAT(CONVERT_TZ(created_at, "+00:00", "+07:00"), "%Y-%m-%d %H:00:00") AS hour_slot'),
-                DB::raw('COUNT(DISTINCT user_id) AS unique_visits')
+            // // Validate the date format
+            if (!$selectedDate || !Carbon::hasFormat($selectedDate, 'Y-m-d')) {
+                return response()->json(['error' => 'Invalid date format.'], 400);
+            }
+            $startDateTime = Carbon::parse("{$selectedDate} 00:00:00", 'Asia/Bangkok')->setTimezone('UTC');
+            $endDateTime = Carbon::parse("{$selectedDate} 23:59:59", 'Asia/Bangkok')->setTimezone('UTC');
+            $sql = "WITH hourly_first_visit AS (
+                SELECT
+                    user_id,
+                    DATE_FORMAT(CONVERT_TZ(created_at, '+00:00', '+07:00'), '%Y-%m-%d %H:00:00') AS hour_slot,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY user_id
+                        ORDER BY created_at
+                    ) AS rn
+                FROM
+                    user_visits
+                WHERE created_at BETWEEN :startDateTime AND :endDateTime
             )
-            ->whereBetween('created_at', [
-                $startDateTime,
-                $endDateTime
-            ])
-            ->groupBy('hour_slot')
-            ->orderBy('hour_slot') // Change to order by hour_slot
-            ->get();
-
-        return  $uniqueVisitsByHour;
+            SELECT
+                hour_slot,
+                COUNT(user_id) AS unique_visits
+            FROM
+                hourly_first_visit
+            WHERE
+                rn = 1
+            GROUP BY
+                hour_slot
+            ORDER BY
+                hour_slot
+        ";
+            $results = DB::select($sql, [
+                'startDateTime' => $startDateTime,
+                'endDateTime' => $endDateTime
+            ]); // Pass the SQL string directly
+            return $results;
+        } catch (\Exception $e) {
+            // Return a JSON response with the error message
+            return response()->json(['error' => 'An error occurred while processing your request.'], 500);
+        }
     }
 
     public function getUniqueVisitsByDayInCurrentMonth()
